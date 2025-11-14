@@ -5,8 +5,15 @@ import requests
 from celery import shared_task
 from apps.webhooks.selectors import get_webhook_by_id
 
+# Import celery app to ensure tasks are registered
+try:
+    from config.celery_app import app as celery_app
+except ImportError:
+    # Fallback if import fails
+    celery_app = None
 
-@shared_task
+
+@shared_task(name='apps.webhooks.tasks.trigger_webhook_task')
 def trigger_webhook_task(webhook_id, payload):
     """
     Trigger a webhook asynchronously.

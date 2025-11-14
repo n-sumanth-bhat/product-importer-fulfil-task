@@ -8,8 +8,15 @@ from apps.uploads.services import (
     update_import_job_status
 )
 
+# Import celery app to ensure tasks are registered
+try:
+    from config.celery_app import app as celery_app
+except ImportError:
+    # Fallback if import fails
+    celery_app = None
 
-@shared_task
+
+@shared_task(name='apps.uploads.tasks.process_csv_import_task')
 def process_csv_import_task(job_id, file_content):
     """
     Process CSV import asynchronously.

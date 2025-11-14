@@ -105,7 +105,15 @@ redis-server
 
 2. Start Celery worker (in a separate terminal):
 ```bash
-celery -A celery_app worker --loglevel=info
+# For Windows (use --pool=solo to avoid billiard pool issues):
+celery -A config.celery_app worker --pool=solo --loglevel=info
+
+# For Linux/Mac:
+celery -A config.celery_app worker --loglevel=info
+
+# Or use the provided scripts:
+# Windows: start_celery.bat
+# Linux/Mac: ./start_celery.sh
 ```
 
 3. Start Django development server:

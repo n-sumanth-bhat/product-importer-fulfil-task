@@ -36,22 +36,48 @@ def update_import_job_status(job_id, status, progress=None, processed_records=No
     return job
 
 
+def normalize_csv_record(record):
+    """
+    Normalize CSV record keys to be case-insensitive.
+    Converts all keys to a standard format (title case) for consistent access.
+    
+    Args:
+        record: dict with CSV row data (original case-sensitive keys)
+    
+    Returns:
+        dict: Record with normalized keys
+    """
+    normalized = {}
+    # Map of normalized key -> original key
+    key_mapping = {}
+    
+    for key, value in record.items():
+        # Normalize key to title case (e.g., 'sku' -> 'Sku', 'SKU' -> 'Sku', 'Name' -> 'Name')
+        normalized_key = key.strip().title()
+        normalized[normalized_key] = value
+        key_mapping[normalized_key] = key
+    
+    return normalized
+
+
 def parse_csv_file(file_content):
     """
-    Parse CSV file content and return records.
+    Parse CSV file content and return records with normalized (case-insensitive) headers.
     
     Args:
         file_content: File content (bytes or string)
     
     Returns:
-        list: List of dictionaries with CSV data
+        list: List of dictionaries with CSV data (normalized keys)
     """
     if isinstance(file_content, bytes):
         file_content = file_content.decode('utf-8')
     
     csv_file = io.StringIO(file_content)
     reader = csv.DictReader(csv_file)
-    records = list(reader)
+    
+    # Normalize all records to handle case-insensitive headers
+    records = [normalize_csv_record(record) for record in reader]
     
     return records
 
@@ -59,16 +85,21 @@ def parse_csv_file(file_content):
 def validate_csv_record(record):
     """
     Validate a single CSV record.
+    Assumes record keys are already normalized to title case (case-insensitive).
     
     Args:
-        record: dict with CSV row data
+        record: dict with CSV row data (normalized keys like 'Sku', 'Name', 'Description')
     
     Returns:
         tuple: (is_valid, error_message)
     """
-    if not record.get('SKU'):
+    # Keys are normalized to title case, so 'Sku' and 'Name' are the standard keys
+    sku = (record.get('Sku') or '').strip()
+    name = (record.get('Name') or '').strip()
+    
+    if not sku:
         return False, "SKU is required"
-    if not record.get('Name'):
+    if not name:
         return False, "Name is required"
     return True, None
 
@@ -107,19 +138,26 @@ def process_csv_chunk(job_id, records, chunk_size=1000):
             if not is_valid:
                 total_errors += 1
                 chunk_errors += 1
+                # Get SKU for error reporting (keys are normalized to title case)
+                sku_value = (record.get('Sku') or '').strip()
                 all_errors.append({
                     'row': row_number,
-                    'sku': record.get('SKU', ''),
+                    'sku': sku_value,
                     'error': error_msg
                 })
                 continue
             
             try:
+                # Get values (keys are normalized to title case: 'Sku', 'Name', 'Description')
+                sku = (record.get('Sku') or '').strip()
+                name = (record.get('Name') or '').strip()
+                description = (record.get('Description') or '').strip() or None
+                
                 # Create or update product (case-insensitive SKU handling)
                 create_product(
-                    sku=record['SKU'].strip(),
-                    name=record['Name'].strip(),
-                    description=record.get('Description', '').strip() or None,
+                    sku=sku,
+                    name=name,
+                    description=description,
                     active=True  # Default to active
                 )
                 total_processed += 1
@@ -127,9 +165,11 @@ def process_csv_chunk(job_id, records, chunk_size=1000):
             except Exception as e:
                 total_errors += 1
                 chunk_errors += 1
+                # Get SKU for error reporting (keys are normalized to title case)
+                sku_value = (record.get('Sku') or '').strip()
                 all_errors.append({
                     'row': row_number,
-                    'sku': record.get('SKU', ''),
+                    'sku': sku_value,
                     'error': str(e)
                 })
         
