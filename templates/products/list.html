@@ -1,0 +1,83 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Products - Product Importer{% endblock %}
+
+{% block content %}
+<div class="products-page">
+    <div class="page-header">
+        <h2>Product Management</h2>
+        <div class="actions">
+            <button class="btn btn-primary" onclick="openCreateModal()">Create Product</button>
+            <button class="btn btn-danger" onclick="confirmBulkDelete()">Delete All Products</button>
+        </div>
+    </div>
+    
+    <div class="filters">
+        <input type="text" id="filter-sku" placeholder="Filter by SKU" onkeyup="applyFilters()">
+        <input type="text" id="filter-name" placeholder="Filter by Name" onkeyup="applyFilters()">
+        <input type="text" id="filter-description" placeholder="Filter by Description" onkeyup="applyFilters()">
+        <select id="filter-active" onchange="applyFilters()">
+            <option value="">All Status</option>
+            <option value="true">Active</option>
+            <option value="false">Inactive</option>
+        </select>
+        <button class="btn btn-secondary" onclick="clearFilters()">Clear</button>
+    </div>
+    
+    <div id="products-table-container">
+        <table class="products-table">
+            <thead>
+                <tr>
+                    <th>SKU</th>
+                    <th>Name</th>
+                    <th>Description</th>
+                    <th>Active</th>
+                    <th>Created At</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="products-tbody">
+                <tr><td colspan="6">Loading...</td></tr>
+            </tbody>
+        </table>
+    </div>
+    
+    <div class="pagination" id="pagination"></div>
+</div>
+
+<!-- Create/Edit Modal -->
+<div id="product-modal" class="modal">
+    <div class="modal-content">
+        <span class="close" onclick="closeModal()">&times;</span>
+        <h3 id="modal-title">Create Product</h3>
+        <form id="product-form">
+            <input type="hidden" id="product-id">
+            <div class="form-group">
+                <label for="product-sku">SKU *</label>
+                <input type="text" id="product-sku" required>
+            </div>
+            <div class="form-group">
+                <label for="product-name">Name *</label>
+                <input type="text" id="product-name" required>
+            </div>
+            <div class="form-group">
+                <label for="product-description">Description</label>
+                <textarea id="product-description"></textarea>
+            </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="product-active" checked> Active
+                </label>
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Save</button>
+                <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script src="{% static 'js/products.js' %}"></script>
+{% endblock %}
+

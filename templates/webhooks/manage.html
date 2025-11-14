@@ -1,0 +1,94 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Webhooks - Product Importer{% endblock %}
+
+{% block content %}
+<div class="webhooks-page">
+    <div class="page-header">
+        <h2>Webhook Management</h2>
+        <button class="btn btn-primary" onclick="openCreateModal()">Add Webhook</button>
+    </div>
+    
+    <div class="filters">
+        <select id="filter-event-type" onchange="loadWebhooks()">
+            <option value="">All Event Types</option>
+            <option value="product.created">Product Created</option>
+            <option value="product.updated">Product Updated</option>
+            <option value="product.deleted">Product Deleted</option>
+        </select>
+        <select id="filter-enabled" onchange="loadWebhooks()">
+            <option value="">All Status</option>
+            <option value="true">Enabled</option>
+            <option value="false">Disabled</option>
+        </select>
+    </div>
+    
+    <div id="webhooks-table-container">
+        <table class="webhooks-table">
+            <thead>
+                <tr>
+                    <th>URL</th>
+                    <th>Event Type</th>
+                    <th>Enabled</th>
+                    <th>Created At</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="webhooks-tbody">
+                <tr><td colspan="5">Loading...</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Create/Edit Modal -->
+<div id="webhook-modal" class="modal">
+    <div class="modal-content">
+        <span class="close" onclick="closeModal()">&times;</span>
+        <h3 id="modal-title">Add Webhook</h3>
+        <form id="webhook-form">
+            <input type="hidden" id="webhook-id">
+            <div class="form-group">
+                <label for="webhook-url">URL *</label>
+                <input type="url" id="webhook-url" required>
+            </div>
+            <div class="form-group">
+                <label for="webhook-event-type">Event Type *</label>
+                <select id="webhook-event-type" required>
+                    <option value="">Select event type</option>
+                    <option value="product.created">Product Created</option>
+                    <option value="product.updated">Product Updated</option>
+                    <option value="product.deleted">Product Deleted</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="webhook-enabled" checked> Enabled
+                </label>
+            </div>
+            <div class="form-group">
+                <label for="webhook-headers">Headers (JSON)</label>
+                <textarea id="webhook-headers" placeholder='{"Authorization": "Bearer token"}'></textarea>
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Save</button>
+                <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Test Result Modal -->
+<div id="test-result-modal" class="modal">
+    <div class="modal-content">
+        <span class="close" onclick="closeTestModal()">&times;</span>
+        <h3>Test Result</h3>
+        <div id="test-result-content"></div>
+        <button class="btn btn-secondary" onclick="closeTestModal()">Close</button>
+    </div>
+</div>
+
+<script src="{% static 'js/webhooks.js' %}"></script>
+{% endblock %}
+

@@ -1,0 +1,46 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Upload CSV - Product Importer{% endblock %}
+
+{% block content %}
+<div class="upload-page">
+    <h2>Upload CSV File</h2>
+    
+    <div class="upload-section">
+        <form id="upload-form" enctype="multipart/form-data">
+            {% csrf_token %}
+            <div class="file-upload-area" id="upload-area">
+                <input type="file" id="csv-file" name="file" accept=".csv" required>
+                <label for="csv-file" class="upload-label">
+                    <span id="upload-text">Choose CSV file or drag it here</span>
+                    <span id="file-name" style="display: none; font-weight: bold; margin-top: 10px;"></span>
+                </label>
+            </div>
+            <button type="submit" class="btn btn-primary" id="upload-btn">Upload</button>
+        </form>
+    </div>
+    
+    <div id="upload-progress" class="progress-section" style="display: none;">
+        <h3>Upload Progress</h3>
+        <div class="progress-bar-container">
+            <div class="progress-bar" id="progress-bar"></div>
+            <span id="progress-text">0%</span>
+        </div>
+        <div id="progress-details">
+            <p>Status: <span id="status-text">Processing...</span></p>
+            <p>Processed: <span id="processed-count">0</span> / <span id="total-count">0</span></p>
+        </div>
+        <div id="upload-errors" class="errors" style="display: none;"></div>
+    </div>
+    
+    <div id="upload-success" class="success-message" style="display: none;">
+        <h3>Upload Complete!</h3>
+        <p id="success-message"></p>
+        <button class="btn btn-primary" onclick="location.reload()">Upload Another File</button>
+    </div>
+</div>
+
+<script src="{% static 'js/upload.js' %}"></script>
+{% endblock %}
+
