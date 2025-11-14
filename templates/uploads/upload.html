@@ -22,7 +22,10 @@
     </div>
     
     <div id="upload-progress" class="progress-section" style="display: none;">
-        <h3>Upload Progress</h3>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+            <h3 style="margin: 0;">Upload Progress</h3>
+            <button class="btn btn-danger" id="cancel-btn" onclick="cancelUpload()" style="display: none;">Cancel Upload</button>
+        </div>
         <div class="progress-bar-container">
             <div class="progress-bar" id="progress-bar"></div>
             <span id="progress-text">0%</span>

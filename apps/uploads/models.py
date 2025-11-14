@@ -9,6 +9,7 @@ class ImportJob(models.Model):
         ('processing', 'Processing'),
         ('completed', 'Completed'),
         ('failed', 'Failed'),
+        ('cancelled', 'Cancelled'),
     ]
     
     file_name = models.CharField(max_length=255)
@@ -17,6 +18,8 @@ class ImportJob(models.Model):
     total_records = models.IntegerField(default=0)
     processed_records = models.IntegerField(default=0)
     errors = models.JSONField(default=list, blank=True)
+    celery_task_id = models.CharField(max_length=255, null=True, blank=True, db_index=True)
+    last_updated_at = models.DateTimeField(auto_now=True)  # Track last update for staleness detection
     created_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
 

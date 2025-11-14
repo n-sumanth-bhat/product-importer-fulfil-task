@@ -62,7 +62,13 @@ class CSVUploadAPIView(APIView):
         
         # Trigger async task
         try:
-            process_csv_import_task.delay(import_job.id, file_content.decode('utf-8'))
+            task = process_csv_import_task.delay(import_job.id, file_content.decode('utf-8'))
+            # Store task ID for cancellation
+            update_import_job_status(
+                job_id=import_job.id,
+                celery_task_id=task.id,
+                update_fields=['celery_task_id', 'last_updated_at']
+            )
         except Exception as e:
             # If Celery task fails to queue, mark job as failed
             update_import_job_status(
@@ -97,4 +103,50 @@ class ImportJobProgressAPIView(APIView):
         job.refresh_from_db()
         serializer = ImportJobSerializer(job)
         return Response(serializer.data)
+
+
+class ImportJobCancelAPIView(APIView):
+    """Cancel an import job."""
+    
+    def post(self, request, job_id):
+        """Cancel a running import job."""
+        from apps.uploads.selectors import get_import_job_by_id
+        from apps.uploads.services import update_import_job_status
+        from celery.result import AsyncResult
+        
+        job = get_import_job_by_id(job_id)
+        if not job:
+            return Response(
+                {'error': 'Import job not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Check if job can be cancelled
+        if job.status in ('completed', 'failed', 'cancelled'):
+            return Response(
+                {'error': f'Cannot cancel job with status: {job.status}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Revoke Celery task if it exists
+        if job.celery_task_id:
+            try:
+                from config.celery_app import app
+                app.control.revoke(job.celery_task_id, terminate=True)
+            except Exception as e:
+                # Log error but continue with cancellation
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Error revoking Celery task {job.celery_task_id}: {str(e)}")
+        
+        # Update job status to cancelled
+        update_import_job_status(
+            job_id=job_id,
+            status='cancelled',
+            update_fields=['status', 'completed_at', 'last_updated_at']
+        )
+        
+        job.refresh_from_db()
+        serializer = ImportJobSerializer(job)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 

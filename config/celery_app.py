@@ -18,11 +18,11 @@ app.config_from_object('django.conf:settings', namespace='CELERY')
 # Initialize Django if not already initialized
 # This is needed when Celery worker imports this module
 # Must be called AFTER creating the Celery app but BEFORE autodiscover
-try:
-    django.setup()
-except RuntimeError:
-    # Django is already set up (e.g., when running as Django server), ignore
-    pass
+# try:
+#     django.setup()
+# except RuntimeError:
+#     # Django is already set up (e.g., when running as Django server), ignore
+#     pass
 
 # Load task modules from all registered Django apps.
 # autodiscover_tasks will discover tasks after Django is fully initialized

@@ -12,10 +12,11 @@ class ImportJobSerializer(serializers.ModelSerializer):
         model = ImportJob
         fields = [
             'id', 'file_name', 'status', 'progress', 'total_records',
-            'processed_records', 'errors', 'created_at', 'completed_at'
+            'processed_records', 'errors', 'celery_task_id', 'last_updated_at',
+            'created_at', 'completed_at'
         ]
         read_only_fields = [
             'id', 'status', 'progress', 'total_records', 'processed_records',
-            'errors', 'created_at', 'completed_at'
+            'errors', 'celery_task_id', 'last_updated_at', 'created_at', 'completed_at'
         ]
 

@@ -3,7 +3,7 @@
 let progressInterval = null;
 let currentJobId = null;
 let pollAttempts = 0;
-const MAX_POLL_ATTEMPTS = 300; // 10 minutes max (300 * 2 seconds)
+const MAX_POLL_ATTEMPTS = 3600; // 1 hour max for very large files (3600 * 10 seconds)
 let droppedFile = null; // Store dropped file
 
 // Initialize on page load
@@ -122,6 +122,7 @@ document.getElementById('upload-form').addEventListener('submit', async (e) => {
         document.getElementById('upload-success').style.display = 'none';
         document.getElementById('upload-errors').style.display = 'none';
         document.getElementById('upload-btn').disabled = true;
+        document.getElementById('cancel-btn').style.display = 'block';
         
         // Reset progress
         updateProgress({
@@ -159,6 +160,21 @@ document.getElementById('upload-form').addEventListener('submit', async (e) => {
     }
 });
 
+// Calculate dynamic polling interval based on file size
+function getPollingInterval(totalRecords) {
+    if (totalRecords < 100) {
+        return 500; // 0.5 seconds for very small files
+    } else if (totalRecords < 1000) {
+        return 1000; // 1 second for small files
+    } else if (totalRecords < 10000) {
+        return 2000; // 2 seconds for medium files
+    } else if (totalRecords < 100000) {
+        return 5000; // 5 seconds for large files
+    } else {
+        return 10000; // 10 seconds for very large files
+    }
+}
+
 // Start polling for progress
 function startProgressPolling(jobId) {
     // Clear any existing interval
@@ -166,7 +182,11 @@ function startProgressPolling(jobId) {
         clearInterval(progressInterval);
     }
     
-    progressInterval = setInterval(async () => {
+    let currentPollingInterval = 2000; // Default interval in milliseconds
+    let lastJobData = null;
+    let lastPollTime = Date.now();
+    
+    const pollProgress = async () => {
         try {
             pollAttempts++;
             
@@ -180,17 +200,72 @@ function startProgressPolling(jobId) {
             
             const job = await apiRequest(`/api/uploads/progress/${jobId}/`);
             
+            // Update polling interval dynamically based on total records
+            if (job.total_records) {
+                const newInterval = getPollingInterval(job.total_records);
+                if (newInterval !== currentPollingInterval) {
+                    currentPollingInterval = newInterval;
+                    // Restart with new interval
+                    clearInterval(progressInterval);
+                    progressInterval = setInterval(pollProgress, currentPollingInterval);
+                }
+            }
+            
+            // Update progress
             updateProgress(job);
+            
+            // Staleness detection: Check if job hasn't updated in a while
+            if (job.last_updated_at) {
+                const lastUpdate = new Date(job.last_updated_at);
+                const now = new Date();
+                const minutesSinceUpdate = (now - lastUpdate) / (1000 * 60);
+                
+                // If no update for 5 minutes and still processing, show warning
+                if (job.status === 'processing' && minutesSinceUpdate > 5) {
+                    document.getElementById('status-text').textContent = 
+                        `Processing... (No update for ${Math.floor(minutesSinceUpdate)} minutes - may be stalled)`;
+                }
+            }
+            
+            // Calculate estimated time remaining for large files
+            if (job.status === 'processing' && job.total_records > 1000 && job.processed_records > 0) {
+                const now = Date.now();
+                const timeElapsed = (now - lastPollTime) / 1000; // seconds
+                
+                if (lastJobData && lastJobData.processed_records < job.processed_records && timeElapsed > 0) {
+                    const recordsProcessed = job.processed_records - lastJobData.processed_records;
+                    const recordsPerSecond = recordsProcessed / timeElapsed;
+                    const remainingRecords = job.total_records - job.processed_records;
+                    const estimatedSeconds = remainingRecords / recordsPerSecond;
+                    
+                    if (estimatedSeconds > 0 && estimatedSeconds < 3600 && recordsPerSecond > 0) {
+                        const minutes = Math.floor(estimatedSeconds / 60);
+                        const seconds = Math.floor(estimatedSeconds % 60);
+                        document.getElementById('status-text').textContent = 
+                            `Processing... (Est. ${minutes}m ${seconds}s remaining)`;
+                    }
+                }
+                lastJobData = job;
+                lastPollTime = now;
+            }
             
             // Handle different statuses
             if (job.status === 'completed') {
                 clearInterval(progressInterval);
                 document.getElementById('upload-btn').disabled = false;
+                document.getElementById('cancel-btn').style.display = 'none';
                 showSuccess(job);
             } else if (job.status === 'failed') {
                 clearInterval(progressInterval);
                 document.getElementById('upload-btn').disabled = false;
+                document.getElementById('cancel-btn').style.display = 'none';
                 showErrors(job.errors || [{'error': 'Upload failed. Please check the file format.'}]);
+            } else if (job.status === 'cancelled') {
+                clearInterval(progressInterval);
+                document.getElementById('upload-btn').disabled = false;
+                document.getElementById('cancel-btn').style.display = 'none';
+                document.getElementById('status-text').textContent = 'Cancelled';
+                alert('Upload has been cancelled.');
             } else if (job.status === 'processing' || job.status === 'pending') {
                 // Continue polling
                 // If stuck in pending for too long, show warning
@@ -208,7 +283,10 @@ function startProgressPolling(jobId) {
                 alert('Import job not found. The upload may have failed.');
             }
         }
-    }, 2000); // Poll every 2 seconds
+    };
+    
+    // Start polling with initial interval
+    progressInterval = setInterval(pollProgress, currentPollingInterval);
 }
 
 // Update progress UI
@@ -217,11 +295,19 @@ function updateProgress(job) {
     const processed = job.processed_records || 0;
     const total = job.total_records || 0;
     
+    // Update progress bar with smooth animation
     document.getElementById('progress-bar').style.width = `${progress}%`;
     document.getElementById('progress-text').textContent = `${progress}%`;
-    document.getElementById('status-text').textContent = job.status.charAt(0).toUpperCase() + job.status.slice(1);
-    document.getElementById('processed-count').textContent = processed;
-    document.getElementById('total-count').textContent = total;
+    
+    // Update counts
+    document.getElementById('processed-count').textContent = processed.toLocaleString();
+    document.getElementById('total-count').textContent = total.toLocaleString();
+    
+    // Update status (don't override if it has estimated time)
+    const statusText = document.getElementById('status-text');
+    if (!statusText.textContent.includes('Est.')) {
+        statusText.textContent = job.status.charAt(0).toUpperCase() + job.status.slice(1);
+    }
 }
 
 // Show success message
@@ -248,5 +334,35 @@ function showErrors(errors) {
         errors.slice(0, 10).map(error => 
             `<p>Row ${error.row || 'N/A'}: ${error.error || error}</p>`
         ).join('');
+}
+
+// Cancel upload
+async function cancelUpload() {
+    if (!currentJobId) {
+        return;
+    }
+    
+    if (!confirm('Are you sure you want to cancel this upload? The operation will be stopped immediately.')) {
+        return;
+    }
+    
+    try {
+        const response = await apiRequest(`/api/uploads/cancel/${currentJobId}/`, {
+            method: 'POST',
+        });
+        
+        // Stop polling
+        if (progressInterval) {
+            clearInterval(progressInterval);
+        }
+        
+        document.getElementById('upload-btn').disabled = false;
+        document.getElementById('cancel-btn').style.display = 'none';
+        document.getElementById('status-text').textContent = 'Cancelled';
+        
+        alert('Upload has been cancelled successfully.');
+    } catch (error) {
+        alert('Error cancelling upload: ' + error.message);
+    }
 }
 

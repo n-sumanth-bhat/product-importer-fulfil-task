@@ -2,12 +2,13 @@
 URL routing for upload endpoints.
 """
 from django.urls import path
-from apps.uploads.api import CSVUploadAPIView, ImportJobProgressAPIView
+from apps.uploads.api import CSVUploadAPIView, ImportJobProgressAPIView, ImportJobCancelAPIView
 
 app_name = 'uploads'
 
 urlpatterns = [
     path('upload/', CSVUploadAPIView.as_view(), name='upload'),
     path('progress/<int:job_id>/', ImportJobProgressAPIView.as_view(), name='progress'),
+    path('cancel/<int:job_id>/', ImportJobCancelAPIView.as_view(), name='cancel'),
 ]
 

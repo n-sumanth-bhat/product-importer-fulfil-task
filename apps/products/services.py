@@ -120,23 +120,20 @@ def delete_product(product_id):
 
 def bulk_delete_products():
     """
-    Delete all products.
+    Delete all products using efficient bulk delete.
+    Note: Webhooks are not triggered for bulk delete to improve performance.
     
     Returns:
         int: Number of products deleted
     """
     from apps.products.selectors import get_all_products
-    from apps.products.serializers import ProductSerializer
-    from apps.webhooks.services import trigger_webhooks_for_event
+    from django.db import transaction
     
-    products = get_all_products()
+    with transaction.atomic():
+        products = get_all_products()
+        count = products.count()
+        # Use QuerySet.delete() which is much more efficient than iterating
+        products.delete()
     
-    # Trigger webhooks for each product deletion
-    for product in products:
-        product_data = ProductSerializer(product).data
-        trigger_webhooks_for_event('product.deleted', product_data)
-    
-    count = products.count()
-    products.delete()
     return count
 
