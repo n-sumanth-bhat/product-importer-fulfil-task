@@ -1,5 +1,7 @@
 # Product Importer - Django Application
 
+**Link to output screenshots**: `https://drive.google.com/drive/folders/1erZYYa_2e-vGswL6NkNQD8O2UYQGhiyI?usp=sharing`
+
 A Django-based web application for importing and managing products from CSV files. Built with Django, Django REST Framework, Celery, and PostgreSQL.
 
 ## Features
@@ -189,5 +191,4 @@ For production deployment:
 5. Set up Celery workers and Redis in production environment
 
 ## License
-
 This project is part of a technical assessment.
