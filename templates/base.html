@@ -24,6 +24,24 @@
         {% block content %}{% endblock %}
     </main>
     
+    <!-- Dialog/Modal Component -->
+    <div id="dialog-overlay" class="dialog-overlay">
+        <div class="dialog-box">
+            <div class="dialog-header">
+                <h3 id="dialog-title">Dialog</h3>
+                <span class="dialog-close" onclick="closeDialog()">&times;</span>
+            </div>
+            <div class="dialog-body">
+                <p id="dialog-message"></p>
+            </div>
+            <div class="dialog-footer">
+                <button id="dialog-confirm-btn" class="btn btn-primary" onclick="confirmDialog()">Confirm</button>
+                <button id="dialog-cancel-btn" class="btn btn-secondary" onclick="closeDialog()">Cancel</button>
+                <button id="dialog-ok-btn" class="btn btn-primary" onclick="closeDialog()">OK</button>
+            </div>
+        </div>
+    </div>
+    
     <script src="{% static 'js/main.js' %}"></script>
     {% block extra_js %}{% endblock %}
 </body>

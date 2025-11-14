@@ -75,7 +75,7 @@ async function editWebhook(webhookId) {
         document.getElementById('modal-title').textContent = 'Edit Webhook';
         document.getElementById('webhook-modal').style.display = 'block';
     } catch (error) {
-        alert('Error loading webhook: ' + error.message);
+        showDialog('Error', 'Error loading webhook: ' + error.message, 'error');
     }
 }
 
@@ -97,7 +97,7 @@ document.getElementById('webhook-form').addEventListener('submit', async (e) => 
             headers = JSON.parse(headersText);
         }
     } catch (error) {
-        alert('Invalid JSON in headers field');
+        showDialog('Invalid JSON', 'Invalid JSON in headers field. Please check the format.', 'error');
         return;
     }
     
@@ -123,15 +123,20 @@ document.getElementById('webhook-form').addEventListener('submit', async (e) => 
         
         closeModal();
         loadWebhooks();
-        alert('Webhook saved successfully!');
+        showDialog('Success', 'Webhook saved successfully!', 'success');
     } catch (error) {
-        alert('Error saving webhook: ' + error.message);
+        showDialog('Error', 'Error saving webhook: ' + error.message, 'error');
     }
 });
 
 // Delete webhook
 async function deleteWebhook(webhookId) {
-    if (!confirm('Are you sure you want to delete this webhook?')) {
+    const confirmed = await showConfirmDialog(
+        'Delete Webhook',
+        'Are you sure you want to delete this webhook?'
+    );
+    
+    if (!confirmed) {
         return;
     }
     
@@ -140,9 +145,9 @@ async function deleteWebhook(webhookId) {
             method: 'DELETE',
         });
         loadWebhooks();
-        alert('Webhook deleted successfully!');
+        showDialog('Success', 'Webhook deleted successfully!', 'success');
     } catch (error) {
-        alert('Error deleting webhook: ' + error.message);
+        showDialog('Error', 'Error deleting webhook: ' + error.message, 'error');
     }
 }
 
@@ -155,7 +160,7 @@ async function testWebhook(webhookId) {
         
         showTestResult(result);
     } catch (error) {
-        alert('Error testing webhook: ' + error.message);
+        showDialog('Error', 'Error testing webhook: ' + error.message, 'error');
     }
 }
 

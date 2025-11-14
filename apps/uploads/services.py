@@ -13,10 +13,16 @@ def create_import_job(file_name):
     return ImportJob.objects.create(file_name=file_name)
 
 
-def update_import_job_status(job_id, status=None, progress=None, processed_records=None, total_records=None, errors=None, celery_task_id=None, update_fields=None):
+def update_import_job_status(job_id, status=None, phase=None, progress=None, processed_records=None, total_records=None, errors=None, celery_task_id=None, s3_key=None, file_size=None, update_fields=None):
     """
     Update import job status and progress.
     Uses update_fields to minimize DB overhead for frequent updates.
+    
+    Progress calculation based on phase:
+    - uploading: 0-10%
+    - parsing: 10-20%
+    - processing: 20-100% (based on processed_records/total_records)
+    - completed: 100%
     """
     job = get_import_job_by_id(job_id)
     if not job:
@@ -35,6 +41,24 @@ def update_import_job_status(job_id, status=None, progress=None, processed_recor
             from django.utils import timezone
             job.completed_at = timezone.now()
             fields_to_update.append('completed_at')
+    
+    if phase is not None:
+        job.phase = phase
+        fields_to_update.append('phase')
+    
+    # Calculate progress based on phase if not explicitly provided
+    if progress is None and phase is not None:
+        if phase == 'uploading':
+            progress = 5  # Mid-point of uploading phase
+        elif phase == 'parsing':
+            progress = 15  # Mid-point of parsing phase
+        elif phase == 'processing' and processed_records is not None and total_records:
+            # Calculate progress within processing phase (20-100%)
+            processing_progress = (processed_records / total_records) * 80  # 80% of total (20-100%)
+            progress = int(20 + processing_progress)
+            progress = min(progress, 99)  # Cap at 99% until completed
+        elif phase == 'completed':
+            progress = 100
     
     if progress is not None:
         job.progress = progress
@@ -55,6 +79,14 @@ def update_import_job_status(job_id, status=None, progress=None, processed_recor
     if celery_task_id is not None:
         job.celery_task_id = celery_task_id
         fields_to_update.append('celery_task_id')
+    
+    if s3_key is not None:
+        job.s3_key = s3_key
+        fields_to_update.append('s3_key')
+    
+    if file_size is not None:
+        job.file_size = file_size
+        fields_to_update.append('file_size')
     
     # Always update last_updated_at for staleness detection
     fields_to_update.append('last_updated_at')
@@ -133,6 +165,435 @@ def validate_csv_record(record):
     if not name:
         return False, "Name is required"
     return True, None
+
+
+def preload_existing_skus():
+    """
+    Preload all existing SKUs into a dictionary for O(1) case-insensitive lookup.
+    This eliminates N+1 queries during CSV processing.
+    
+    Returns:
+        dict: Dictionary mapping lowercase SKU to product data
+        Format: {sku_lower: {'id': id, 'sku': sku, 'name': name, 'description': description, 'active': active}}
+    """
+    from apps.products.models import Product
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    
+    logger.info("Preloading existing SKUs into memory...")
+    products = Product.objects.all().values('id', 'sku', 'name', 'description', 'active')
+    
+    sku_dict = {}
+    for product in products:
+        sku_lower = product['sku'].lower()
+        # If duplicate SKUs exist (shouldn't happen due to constraint, but handle gracefully)
+        if sku_lower not in sku_dict:
+            sku_dict[sku_lower] = product
+    
+    logger.info(f"Preloaded {len(sku_dict)} existing SKUs")
+    return sku_dict
+
+
+def validate_csv_headers(reader):
+    """
+    Validate that CSV has required headers (SKU, Name, Description).
+    Headers are case-insensitive.
+    
+    Args:
+        reader: csv.DictReader instance
+    
+    Returns:
+        tuple: (is_valid, error_message)
+    """
+    if not reader.fieldnames:
+        return False, "CSV file is empty or has no headers"
+    
+    # Normalize headers to title case for comparison
+    normalized_headers = set()
+    for header in reader.fieldnames:
+        # Normalize each header to title case
+        normalized_header = header.strip().title()
+        normalized_headers.add(normalized_header)
+    
+    # Check for required fields (case-insensitive)
+    required_fields = {'Sku', 'Name', 'Description'}
+    missing_fields = required_fields - normalized_headers
+    
+    if missing_fields:
+        return False, f"CSV file is missing required columns: {', '.join(missing_fields)}. Found columns: {', '.join(reader.fieldnames)}"
+    
+    return True, None
+
+
+def count_csv_records(s3_key):
+    """
+    Count total records in CSV file from S3 (quick pass, no processing).
+    Also validates CSV headers.
+    
+    Args:
+        s3_key: S3 object key
+    
+    Returns:
+        int: Total number of records (excluding header)
+    
+    Raises:
+        ValueError: If CSV headers are invalid
+    """
+    from apps.uploads.s3_service import get_s3_file_stream
+    import csv
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    
+    try:
+        # Get streaming file object from S3
+        s3_file = get_s3_file_stream(s3_key)
+        
+        # Use csv.DictReader for efficient row-by-row parsing
+        reader = csv.DictReader(s3_file)
+        
+        # Validate headers
+        is_valid, error_msg = validate_csv_headers(reader)
+        if not is_valid:
+            logger.error(f"Invalid CSV headers: {error_msg}")
+            raise ValueError(error_msg)
+        
+        count = 0
+        for _ in reader:
+            count += 1
+        
+        logger.info(f"Counted {count} records in CSV file")
+        return count
+            
+    except ValueError:
+        # Re-raise validation errors
+        raise
+    except Exception as e:
+        logger.error(f"Error counting CSV records from S3: {str(e)}", exc_info=True)
+        raise
+
+
+def stream_csv_from_s3(s3_key):
+    """
+    Stream CSV file from S3 using smart_open generator.
+    Yields normalized CSV records one at a time.
+    Headers are validated before streaming.
+    
+    Args:
+        s3_key: S3 object key
+    
+    Yields:
+        tuple: (normalized_record, row_number)
+    
+    Raises:
+        ValueError: If CSV headers are invalid
+    """
+    from apps.uploads.s3_service import get_s3_file_stream
+    import csv
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    
+    try:
+        # Get streaming file object from S3
+        s3_file = get_s3_file_stream(s3_key)
+        
+        # Use csv.DictReader for efficient row-by-row parsing
+        reader = csv.DictReader(s3_file)
+        
+        # Validate headers (headers are already validated in count_csv_records, but validate again for safety)
+        is_valid, error_msg = validate_csv_headers(reader)
+        if not is_valid:
+            logger.error(f"Invalid CSV headers: {error_msg}")
+            raise ValueError(error_msg)
+        
+        row_number = 1  # Start at 1 (header is row 0)
+        for record in reader:
+            row_number += 1
+            # Normalize record keys to title case for case-insensitive handling
+            normalized_record = normalize_csv_record(record)
+            yield normalized_record, row_number
+            
+    except ValueError:
+        # Re-raise validation errors
+        raise
+    except Exception as e:
+        logger.error(f"Error streaming CSV from S3: {str(e)}", exc_info=True)
+        raise
+
+
+def process_csv_stream(job_id, csv_generator, existing_skus_dict, total_records, micro_batch_size=500):
+    """
+    Process CSV stream in micro-batches using optimized bulk operations.
+    Uses preloaded SKU dictionary for O(1) lookups.
+    
+    Args:
+        job_id: Import job ID
+        csv_generator: Generator yielding (normalized_record, row_number) tuples
+        existing_skus_dict: Preloaded dictionary of existing SKUs (lowercase keys)
+        total_records: Total number of records to process (already counted)
+        micro_batch_size: Number of records to process in each micro-batch (default: 500)
+    
+    Returns:
+        tuple: (processed_count, error_count, errors)
+    """
+    from apps.products.models import Product
+    from django.db import transaction
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    
+    total_processed = 0
+    total_errors = 0
+    all_errors = []
+    
+    job = get_import_job_by_id(job_id)
+    if not job:
+        return 0, 0, []
+    
+    # Micro-batch accumulator
+    micro_batch = []
+    batch_count = 0
+    
+    try:
+        records_seen = 0
+        for record, row_number in csv_generator:
+            records_seen += 1
+            
+            # Check for cancellation periodically
+            if records_seen % 1000 == 0:
+                job.refresh_from_db()
+                if job.status == 'cancelled':
+                    logger.info(f"Import job {job_id} was cancelled during processing")
+                    break
+            
+            # Validate record
+            is_valid, error_msg = validate_csv_record(record)
+            if not is_valid:
+                total_errors += 1
+                sku_value = (record.get('Sku') or '').strip()
+                all_errors.append({
+                    'row': row_number,
+                    'sku': sku_value,
+                    'error': error_msg
+                })
+                continue
+            
+            # Get values (keys are normalized to title case)
+            sku = (record.get('Sku') or '').strip()
+            name = (record.get('Name') or '').strip()
+            description = (record.get('Description') or '').strip() or ''
+            
+            micro_batch.append({
+                'sku': sku,
+                'name': name,
+                'description': description,
+                'active': True,
+                'row_number': row_number
+            })
+            
+            # Process micro-batch when it reaches the size limit
+            if len(micro_batch) >= micro_batch_size:
+                processed, errors = _process_micro_batch(job_id, micro_batch, existing_skus_dict)
+                total_processed += processed
+                total_errors += len(errors)
+                all_errors.extend(errors)
+                micro_batch = []
+                batch_count += 1
+                
+                # Update progress after each micro-batch
+                try:
+                    # Calculate progress: processing phase is 20-100%
+                    # So progress = 20 + (processed/total * 80)
+                    progress = int((total_processed / total_records) * 80) + 20 if total_records > 0 else 20
+                    progress = min(progress, 99)  # Cap at 99% until completed
+                    update_import_job_status(
+                        job_id=job_id,
+                        phase='processing',
+                        status='processing',
+                        progress=progress,
+                        processed_records=total_processed,
+                        # Don't update total_records - it's already set and should remain fixed
+                        errors=all_errors[-100:] if len(all_errors) > 100 else all_errors,
+                        update_fields=['phase', 'status', 'progress', 'processed_records', 'errors', 'last_updated_at']
+                    )
+                except Exception as e:
+                    logger.error(f"Error updating progress for job {job_id}: {str(e)}", exc_info=True)
+                
+                # Log progress periodically
+                if batch_count % 10 == 0:
+                    logger.info(f"Import job {job_id}: Processed {total_processed}/{total_records} records ({progress}%)")
+        
+        # Process remaining records in micro_batch
+        if micro_batch:
+            processed, errors = _process_micro_batch(job_id, micro_batch, existing_skus_dict)
+            total_processed += processed
+            total_errors += len(errors)
+            all_errors.extend(errors)
+            
+    except Exception as e:
+        logger.error(f"Error processing CSV stream for job {job_id}: {str(e)}", exc_info=True)
+        raise
+    
+    return total_processed, total_errors, all_errors
+
+
+def _process_micro_batch(job_id, micro_batch, existing_skus_dict):
+    """
+    Process a micro-batch of products using bulk operations.
+    Helper function for process_csv_stream.
+    
+    Args:
+        job_id: Import job ID
+        micro_batch: List of product data dictionaries
+        existing_skus_dict: Preloaded dictionary of existing SKUs
+    
+    Returns:
+        tuple: (processed_count, errors)
+    """
+    from apps.products.models import Product
+    from django.db import transaction
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    
+    processed = 0
+    errors = []
+    
+    try:
+        with transaction.atomic():
+            products_to_update = []
+            products_to_create = []
+            skus_in_create_batch = set()  # Track SKUs already added to create list in this batch
+            
+            for product_data in micro_batch:
+                sku_lower = product_data['sku'].lower()
+                
+                if sku_lower in existing_skus_dict:
+                    # Update existing product (only if it has an ID - was created in DB before)
+                    existing = existing_skus_dict[sku_lower]
+                    # Only update if product has an ID (exists in DB) and values changed
+                    if existing.get('id') is not None:
+                        if (existing['name'] != product_data['name'] or 
+                            existing['description'] != product_data['description'] or
+                            existing['active'] != product_data['active']):
+                            products_to_update.append(Product(
+                                id=existing['id'],
+                                sku=existing['sku'],  # Keep original SKU case
+                                name=product_data['name'],
+                                description=product_data['description'],
+                                active=product_data['active']
+                            ))
+                            # Update the dict to reflect changes
+                            existing_skus_dict[sku_lower] = {
+                                'id': existing['id'],
+                                'sku': existing['sku'],
+                                'name': product_data['name'],
+                                'description': product_data['description'],
+                                'active': product_data['active']
+                            }
+                    # If id is None, it means it was added to dict but not yet created
+                    # (or created but ID wasn't set in dict)
+                    else:
+                        # This SKU was added to dict but not yet created - create it now
+                        # But only if we haven't already added it to create list in this batch
+                        if sku_lower not in skus_in_create_batch:
+                            products_to_create.append(Product(
+                                sku=product_data['sku'],
+                                name=product_data['name'],
+                                description=product_data['description'],
+                                active=product_data['active']
+                            ))
+                            skus_in_create_batch.add(sku_lower)
+                else:
+                    # Create new product (only if not already in create list)
+                    if sku_lower not in skus_in_create_batch:
+                        products_to_create.append(Product(
+                            sku=product_data['sku'],
+                            name=product_data['name'],
+                            description=product_data['description'],
+                            active=product_data['active']
+                        ))
+                        skus_in_create_batch.add(sku_lower)
+                        # Add to dict for future lookups in same job (will be updated with ID after bulk_create)
+                        existing_skus_dict[sku_lower] = {
+                            'id': None,  # Will be set after bulk_create
+                            'sku': product_data['sku'],
+                            'name': product_data['name'],
+                            'description': product_data['description'],
+                            'active': product_data['active']
+                        }
+            
+            # Bulk update
+            if products_to_update:
+                Product.objects.bulk_update(
+                    products_to_update,
+                    ['name', 'description', 'active'],
+                    batch_size=500
+                )
+            
+            # Bulk create
+            if products_to_create:
+                created_products = Product.objects.bulk_create(
+                    products_to_create,
+                    batch_size=500,
+                    ignore_conflicts=False
+                )
+                # Update dict with created IDs
+                # Note: bulk_create may or may not return objects with IDs depending on DB backend
+                # For PostgreSQL, IDs are typically returned
+                for created in created_products:
+                    if hasattr(created, 'id') and created.id:
+                        sku_lower = created.sku.lower()
+                        if sku_lower in existing_skus_dict:
+                            existing_skus_dict[sku_lower]['id'] = created.id
+                
+                # If IDs weren't returned, fetch them from DB
+                if products_to_create and (not created_products or not hasattr(created_products[0], 'id') or not created_products[0].id):
+                    # Fetch the created products by SKU to get their IDs
+                    created_skus = [p.sku for p in products_to_create]
+                    created_skus_lower = {sku.lower() for sku in created_skus}
+                    
+                    # Query for the products we just created
+                    from django.db.models import Q
+                    from functools import reduce
+                    import operator
+                    
+                    q_objects = [Q(sku__iexact=sku) for sku in created_skus[:200]]  # Batch queries
+                    if q_objects:
+                        fetched_products = Product.objects.filter(
+                            reduce(operator.or_, q_objects)
+                        ).values('id', 'sku')
+                        
+                        for product in fetched_products:
+                            sku_lower = product['sku'].lower()
+                            if sku_lower in created_skus_lower and sku_lower in existing_skus_dict:
+                                existing_skus_dict[sku_lower]['id'] = product['id']
+            
+            processed = len(micro_batch)
+            
+    except Exception as e:
+        logger.error(f"Error in micro-batch processing: {str(e)}", exc_info=True)
+        # Fallback: try individual creates
+        for product_data in micro_batch:
+            try:
+                from apps.products.services import create_product
+                create_product(
+                    sku=product_data['sku'],
+                    name=product_data['name'],
+                    description=product_data['description'] or None,
+                    active=product_data['active']
+                )
+                processed += 1
+            except Exception as e2:
+                errors.append({
+                    'row': product_data['row_number'],
+                    'sku': product_data['sku'],
+                    'error': str(e2)
+                })
+    
+    return processed, errors
 
 
 def process_csv_chunk(job_id, records, chunk_size=None):

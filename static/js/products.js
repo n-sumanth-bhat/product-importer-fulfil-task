@@ -143,7 +143,7 @@ async function editProduct(productId) {
         document.getElementById('modal-title').textContent = 'Edit Product';
         document.getElementById('product-modal').style.display = 'block';
     } catch (error) {
-        alert('Error loading product: ' + error.message);
+        showDialog('Error', 'Error loading product: ' + error.message, 'error');
     }
 }
 
@@ -179,15 +179,20 @@ document.getElementById('product-form').addEventListener('submit', async (e) => 
         
         closeModal();
         loadProducts();
-        alert('Product saved successfully!');
+        showDialog('Success', 'Product saved successfully!', 'success');
     } catch (error) {
-        alert('Error saving product: ' + error.message);
+        showDialog('Error', 'Error saving product: ' + error.message, 'error');
     }
 });
 
 // Delete product
 async function deleteProduct(productId) {
-    if (!confirm('Are you sure you want to delete this product?')) {
+    const confirmed = await showConfirmDialog(
+        'Delete Product',
+        'Are you sure you want to delete this product?'
+    );
+    
+    if (!confirmed) {
         return;
     }
     
@@ -196,15 +201,20 @@ async function deleteProduct(productId) {
             method: 'DELETE',
         });
         loadProducts();
-        alert('Product deleted successfully!');
+        showDialog('Success', 'Product deleted successfully!', 'success');
     } catch (error) {
-        alert('Error deleting product: ' + error.message);
+        showDialog('Error', 'Error deleting product: ' + error.message, 'error');
     }
 }
 
 // Bulk delete
 async function confirmBulkDelete() {
-    if (!confirm('Are you sure you want to delete ALL products? This cannot be undone.')) {
+    const confirmed = await showConfirmDialog(
+        'Delete All Products',
+        'Are you sure you want to delete ALL products? This action cannot be undone.'
+    );
+    
+    if (!confirmed) {
         return;
     }
     
@@ -212,10 +222,10 @@ async function confirmBulkDelete() {
         const result = await apiRequest('/api/products/bulk-delete/', {
             method: 'DELETE',
         });
-        alert(result.message || 'All products deleted successfully!');
+        showDialog('Success', result.message || 'All products deleted successfully!', 'success');
         loadProducts();
     } catch (error) {
-        alert('Error deleting products: ' + error.message);
+        showDialog('Error', 'Error deleting products: ' + error.message, 'error');
     }
 }
 

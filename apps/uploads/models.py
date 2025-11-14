@@ -12,8 +12,18 @@ class ImportJob(models.Model):
         ('cancelled', 'Cancelled'),
     ]
     
+    PHASE_CHOICES = [
+        ('uploading', 'Uploading'),
+        ('parsing', 'Parsing'),
+        ('processing', 'Processing'),
+        ('completed', 'Completed'),
+    ]
+    
     file_name = models.CharField(max_length=255)
+    s3_key = models.CharField(max_length=500, null=True, blank=True)  # S3 object key
+    file_size = models.BigIntegerField(default=0)  # File size in bytes
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', db_index=True)
+    phase = models.CharField(max_length=20, choices=PHASE_CHOICES, default='uploading', db_index=True)
     progress = models.IntegerField(default=0)  # 0-100
     total_records = models.IntegerField(default=0)
     processed_records = models.IntegerField(default=0)

@@ -17,3 +17,6 @@ urlpatterns = [
     path('upload/', TemplateView.as_view(template_name='uploads/upload.html'), name='upload'),
     path('webhooks/', TemplateView.as_view(template_name='webhooks/manage.html'), name='webhooks'),
 ]
+
+# Note: Static files are served by WhiteNoise middleware in production
+# No need to add static() here when using WhiteNoise

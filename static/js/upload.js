@@ -20,15 +20,27 @@ function setupFileInput() {
     
     fileInput.addEventListener('change', (e) => {
         const file = e.target.files[0];
+        const uploadBtn = document.getElementById('upload-btn');
+        
         if (file) {
+            // Validate file type
+            if (!file.name.toLowerCase().endsWith('.csv')) {
+                showDialog('Invalid File Type', 'Please select a CSV file.', 'error');
+                fileInput.value = '';
+                uploadBtn.style.display = 'none';
+                return;
+            }
+            
             droppedFile = null; // Clear dropped file when user selects new one
-            fileNameSpan.textContent = `Selected: ${file.name} (${(file.size / 1024).toFixed(2)} KB)`;
+            fileNameSpan.textContent = `Selected: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
             fileNameSpan.style.display = 'block';
             uploadText.textContent = 'Click to change file';
+            uploadBtn.style.display = 'inline-block';
         } else {
             droppedFile = null;
             fileNameSpan.style.display = 'none';
             uploadText.textContent = 'Choose CSV file or drag it here';
+            uploadBtn.style.display = 'none';
         }
     });
 }
@@ -82,11 +94,18 @@ function setupDragAndDrop() {
                     console.log('Using fallback file assignment');
                 }
                 
-                fileNameSpan.textContent = `Selected: ${file.name} (${(file.size / 1024).toFixed(2)} KB)`;
+                // Validate file type
+                if (!file.name.toLowerCase().endsWith('.csv')) {
+                    showDialog('Invalid File Type', 'Please select a CSV file.', 'error');
+                    return;
+                }
+                
+                fileNameSpan.textContent = `Selected: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
                 fileNameSpan.style.display = 'block';
                 uploadText.textContent = 'Click to change file';
+                document.getElementById('upload-btn').style.display = 'inline-block';
             } else {
-                alert('Please select a CSV file');
+                showDialog('Invalid File Type', 'Please select a CSV file.', 'error');
             }
         }
     }, false);
@@ -106,7 +125,13 @@ document.getElementById('upload-form').addEventListener('submit', async (e) => {
     const file = droppedFile || (fileInput.files && fileInput.files[0]);
     
     if (!file) {
-        alert('Please select a CSV file');
+        showDialog('No File Selected', 'Please select a CSV file to upload.', 'warning');
+        return;
+    }
+    
+    // Validate file type
+    if (!file.name.toLowerCase().endsWith('.csv')) {
+        showDialog('Invalid File Type', 'Please select a CSV file.', 'error');
         return;
     }
     
@@ -148,145 +173,125 @@ document.getElementById('upload-form').addEventListener('submit', async (e) => {
         
         const job = await response.json();
         currentJobId = job.id;
-        pollAttempts = 0;
         
-        // Start polling for progress
-        startProgressPolling(job.id);
+        // Start SSE connection for real-time progress updates
+        startSSEConnection(job.id);
         
     } catch (error) {
-        alert('Error uploading file: ' + error.message);
+        showDialog('Upload Error', 'Error uploading file: ' + error.message, 'error');
         document.getElementById('upload-btn').disabled = false;
         document.getElementById('upload-progress').style.display = 'none';
     }
 });
 
-// Calculate dynamic polling interval based on file size
-function getPollingInterval(totalRecords) {
-    if (totalRecords < 100) {
-        return 500; // 0.5 seconds for very small files
-    } else if (totalRecords < 1000) {
-        return 1000; // 1 second for small files
-    } else if (totalRecords < 10000) {
-        return 2000; // 2 seconds for medium files
-    } else if (totalRecords < 100000) {
-        return 5000; // 5 seconds for large files
-    } else {
-        return 10000; // 10 seconds for very large files
-    }
-}
-
-// Start polling for progress
-function startProgressPolling(jobId) {
-    // Clear any existing interval
+// Start SSE connection for real-time progress updates
+function startSSEConnection(jobId) {
+    // Close any existing SSE connection
     if (progressInterval) {
-        clearInterval(progressInterval);
+        if (progressInterval.close) {
+            progressInterval.close();
+        }
+        progressInterval = null;
     }
     
-    let currentPollingInterval = 2000; // Default interval in milliseconds
     let lastJobData = null;
-    let lastPollTime = Date.now();
+    let lastUpdateTime = Date.now();
     
-    const pollProgress = async () => {
+    // Create EventSource for SSE
+    const eventSource = new EventSource(`/api/uploads/stream/${jobId}/`);
+    progressInterval = eventSource; // Store for cleanup
+    
+    // Handle incoming messages
+    eventSource.onmessage = (event) => {
         try {
-            pollAttempts++;
+            const data = JSON.parse(event.data);
             
-            // Stop polling if max attempts reached
-            if (pollAttempts > MAX_POLL_ATTEMPTS) {
-                clearInterval(progressInterval);
-                document.getElementById('upload-btn').disabled = false;
-                alert('Upload is taking too long. Please check the server logs.');
-                return;
+            // Update progress UI
+            updateProgress({
+                progress: data.progress || 0,
+                processed_records: data.processed || 0,
+                total_records: data.total || 0,
+                status: data.status || 'processing',
+                phase: data.phase || 'processing'
+            });
+            
+            // Update status text with phase information
+            const statusText = document.getElementById('status-text');
+            const phaseMap = {
+                'uploading': 'Uploading to S3...',
+                'parsing': 'Parsing CSV file...',
+                'processing': 'Processing records...',
+                'completed': 'Completed'
+            };
+            
+            if (data.phase && phaseMap[data.phase]) {
+                statusText.textContent = phaseMap[data.phase];
             }
             
-            const job = await apiRequest(`/api/uploads/progress/${jobId}/`);
-            
-            // Update polling interval dynamically based on total records
-            if (job.total_records) {
-                const newInterval = getPollingInterval(job.total_records);
-                if (newInterval !== currentPollingInterval) {
-                    currentPollingInterval = newInterval;
-                    // Restart with new interval
-                    clearInterval(progressInterval);
-                    progressInterval = setInterval(pollProgress, currentPollingInterval);
-                }
-            }
-            
-            // Update progress
-            updateProgress(job);
-            
-            // Staleness detection: Check if job hasn't updated in a while
-            if (job.last_updated_at) {
-                const lastUpdate = new Date(job.last_updated_at);
-                const now = new Date();
-                const minutesSinceUpdate = (now - lastUpdate) / (1000 * 60);
-                
-                // If no update for 5 minutes and still processing, show warning
-                if (job.status === 'processing' && minutesSinceUpdate > 5) {
-                    document.getElementById('status-text').textContent = 
-                        `Processing... (No update for ${Math.floor(minutesSinceUpdate)} minutes - may be stalled)`;
-                }
-            }
-            
-            // Calculate estimated time remaining for large files
-            if (job.status === 'processing' && job.total_records > 1000 && job.processed_records > 0) {
-                const now = Date.now();
-                const timeElapsed = (now - lastPollTime) / 1000; // seconds
-                
-                if (lastJobData && lastJobData.processed_records < job.processed_records && timeElapsed > 0) {
-                    const recordsProcessed = job.processed_records - lastJobData.processed_records;
-                    const recordsPerSecond = recordsProcessed / timeElapsed;
-                    const remainingRecords = job.total_records - job.processed_records;
-                    const estimatedSeconds = remainingRecords / recordsPerSecond;
-                    
-                    if (estimatedSeconds > 0 && estimatedSeconds < 3600 && recordsPerSecond > 0) {
-                        const minutes = Math.floor(estimatedSeconds / 60);
-                        const seconds = Math.floor(estimatedSeconds % 60);
-                        document.getElementById('status-text').textContent = 
-                            `Processing... (Est. ${minutes}m ${seconds}s remaining)`;
-                    }
-                }
-                lastJobData = job;
-                lastPollTime = now;
-            }
-            
-            // Handle different statuses
-            if (job.status === 'completed') {
-                clearInterval(progressInterval);
+            // Handle terminal states
+            if (data.status === 'completed') {
+                eventSource.close();
                 document.getElementById('upload-btn').disabled = false;
                 document.getElementById('cancel-btn').style.display = 'none';
-                showSuccess(job);
-            } else if (job.status === 'failed') {
-                clearInterval(progressInterval);
+                showSuccess({
+                    processed_records: data.processed,
+                    total_records: data.total,
+                    errors: []
+                });
+            } else if (data.status === 'failed') {
+                eventSource.close();
                 document.getElementById('upload-btn').disabled = false;
                 document.getElementById('cancel-btn').style.display = 'none';
-                showErrors(job.errors || [{'error': 'Upload failed. Please check the file format.'}]);
-            } else if (job.status === 'cancelled') {
-                clearInterval(progressInterval);
+                document.getElementById('upload-progress').style.display = 'none';
+                showErrors([{'error': 'Upload failed. Please check the file format.'}]);
+                resetFileInput();
+            } else if (data.status === 'cancelled') {
+                eventSource.close();
                 document.getElementById('upload-btn').disabled = false;
                 document.getElementById('cancel-btn').style.display = 'none';
-                document.getElementById('status-text').textContent = 'Cancelled';
-                alert('Upload has been cancelled.');
-            } else if (job.status === 'processing' || job.status === 'pending') {
-                // Continue polling
-                // If stuck in pending for too long, show warning
-                if (job.status === 'pending' && pollAttempts > 10) {
-                    document.getElementById('status-text').textContent = 
-                        'Pending - Waiting for Celery worker to start processing...';
-                }
+                statusText.textContent = 'Cancelled';
+                showDialog('Upload Cancelled', 'The upload has been cancelled.', 'warning');
             }
+            
+            lastJobData = data;
+            lastUpdateTime = Date.now();
+            
         } catch (error) {
-            console.error('Error polling progress:', error);
-            // If job not found, stop polling
-            if (error.message && error.message.includes('not found')) {
-                clearInterval(progressInterval);
-                document.getElementById('upload-btn').disabled = false;
-                alert('Import job not found. The upload may have failed.');
-            }
+            console.error('Error parsing SSE message:', error);
         }
     };
     
-    // Start polling with initial interval
-    progressInterval = setInterval(pollProgress, currentPollingInterval);
+    // Handle connection errors
+    eventSource.onerror = (error) => {
+        console.error('SSE connection error:', error);
+        
+        // If connection closed and job might still be processing, try to reconnect
+        if (eventSource.readyState === EventSource.CLOSED) {
+            // Check if job is still processing by making a regular API call
+            setTimeout(async () => {
+                try {
+                    const job = await apiRequest(`/api/uploads/progress/${jobId}/`);
+                    if (job.status === 'processing' || job.status === 'pending') {
+                        // Job still processing, reconnect
+                        console.log('Reconnecting SSE...');
+                        startSSEConnection(jobId);
+                    } else {
+                        // Job finished, update UI
+                        updateProgress(job);
+                        if (job.status === 'completed') {
+                            showSuccess(job);
+                        } else if (job.status === 'failed') {
+                            showErrors(job.errors || [{'error': 'Upload failed.'}]);
+                        }
+                        document.getElementById('upload-btn').disabled = false;
+                        document.getElementById('cancel-btn').style.display = 'none';
+                    }
+                } catch (err) {
+                    console.error('Error checking job status:', err);
+                }
+            }, 2000);
+        }
+    };
 }
 
 // Update progress UI
@@ -303,9 +308,19 @@ function updateProgress(job) {
     document.getElementById('processed-count').textContent = processed.toLocaleString();
     document.getElementById('total-count').textContent = total.toLocaleString();
     
-    // Update status (don't override if it has estimated time)
+    // Update status with phase information if available
     const statusText = document.getElementById('status-text');
-    if (!statusText.textContent.includes('Est.')) {
+    if (job.phase) {
+        const phaseMap = {
+            'uploading': 'Uploading to S3...',
+            'parsing': 'Parsing CSV file...',
+            'processing': 'Processing records...',
+            'completed': 'Completed'
+        };
+        if (phaseMap[job.phase]) {
+            statusText.textContent = phaseMap[job.phase];
+        }
+    } else if (!statusText.textContent.includes('Est.') && !statusText.textContent.includes('...')) {
         statusText.textContent = job.status.charAt(0).toUpperCase() + job.status.slice(1);
     }
 }
@@ -320,6 +335,23 @@ function showSuccess(job) {
     if (job.errors && job.errors.length > 0) {
         showErrors(job.errors);
     }
+    
+    // Reset file input and hide upload button
+    resetFileInput();
+}
+
+// Reset file input
+function resetFileInput() {
+    const fileInput = document.getElementById('csv-file');
+    const fileNameSpan = document.getElementById('file-name');
+    const uploadText = document.getElementById('upload-text');
+    const uploadBtn = document.getElementById('upload-btn');
+    
+    fileInput.value = '';
+    droppedFile = null;
+    fileNameSpan.style.display = 'none';
+    uploadText.textContent = 'Choose CSV file or drag it here';
+    uploadBtn.style.display = 'none';
 }
 
 // Show errors
@@ -342,7 +374,12 @@ async function cancelUpload() {
         return;
     }
     
-    if (!confirm('Are you sure you want to cancel this upload? The operation will be stopped immediately.')) {
+    const confirmed = await showConfirmDialog(
+        'Cancel Upload',
+        'Are you sure you want to cancel this upload? The operation will be stopped immediately.'
+    );
+    
+    if (!confirmed) {
         return;
     }
     
@@ -351,18 +388,21 @@ async function cancelUpload() {
             method: 'POST',
         });
         
-        // Stop polling
+        // Close SSE connection if open
         if (progressInterval) {
-            clearInterval(progressInterval);
+            if (progressInterval.close) {
+                progressInterval.close();
+            }
+            progressInterval = null;
         }
         
         document.getElementById('upload-btn').disabled = false;
         document.getElementById('cancel-btn').style.display = 'none';
         document.getElementById('status-text').textContent = 'Cancelled';
         
-        alert('Upload has been cancelled successfully.');
+        showDialog('Upload Cancelled', 'The upload has been cancelled successfully.', 'success');
     } catch (error) {
-        alert('Error cancelling upload: ' + error.message);
+        showDialog('Error', 'Error cancelling upload: ' + error.message, 'error');
     }
 }
 
