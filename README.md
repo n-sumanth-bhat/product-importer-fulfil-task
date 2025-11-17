@@ -49,6 +49,7 @@ The project follows the Hacksoft style guide pattern:
 - Python 3.10+
 - PostgreSQL
 - Redis
+- AWS S3
 
 ### Installation
 
@@ -81,6 +82,10 @@ DB_HOST=localhost
 DB_PORT=5432
 CELERY_BROKER_URL=redis://localhost:6379/0
 CELERY_RESULT_BACKEND=redis://localhost:6379/0
+AWS_ACCESS_KEY_ID=<access_key>
+AWS_SECRET_ACCESS_KEY=<secret-access-key>
+AWS_STORAGE_BUCKET_NAME=<s3-bucket-name>
+AWS_S3_REGION_NAME=<region-name>
 ```
 
 5. Create PostgreSQL database:
