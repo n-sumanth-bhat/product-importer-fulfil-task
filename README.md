@@ -6,7 +6,7 @@ A Django-based web application for importing and managing products from CSV file
 
 ## Features
 
-- **CSV Upload**: Upload large CSV files (up to 500,000 records) with real-time progress tracking
+- **CSV Upload**: Upload large CSV files with real-time progress tracking
 - **Product Management**: Full CRUD operations for products with filtering and pagination
 - **Bulk Delete**: Delete all products with confirmation
 - **Webhook Management**: Configure and manage webhooks for product events
@@ -14,7 +14,7 @@ A Django-based web application for importing and managing products from CSV file
 
 ## Tech Stack
 
-- **Backend**: Django 4.2.7, Django REST Framework
+- **Backend**: Django, Django REST Framework
 - **Database**: PostgreSQL
 - **Task Queue**: Celery with Redis
 - **Frontend**: Django Templates with vanilla JavaScript
